@@ -1,0 +1,38 @@
+{
+  "template_name": "产品展示-快节奏",
+  "version": "1.0",
+  "description": "3秒一段快速切换，节奏感BGM，底部展示文字。适合产品功能展示、卖点快速轮播",
+  "author": "北辰",
+  "category": "带货/营销",
+  "defaults": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "bitrate": "4M",
+    "clip_duration": 3,
+    "transition": "slideleft",
+    "transition_duration": 0.3
+  },
+  "overlays": [
+    {
+      "type": "text",
+      "position": "bottom-center",
+      "content": "点击下方了解更多",
+      "font_size": 28,
+      "animation": "fade-in",
+      "start": 0,
+      "duration": 2
+    },
+    {
+      "type": "watermark",
+      "image": "",
+      "position": "top-right",
+      "scale": 0.1
+    }
+  ],
+  "audio": {
+    "bgm_style": "upbeat-pop",
+    "volume": {"bgm": 0.25, "original": 1.0},
+    "fade": {"in": 0.3, "out": 1.0}
+  }
+}

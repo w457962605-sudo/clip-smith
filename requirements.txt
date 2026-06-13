@@ -1,0 +1,9 @@
+# ClipSmith 依赖
+# 基础功能只需 Python 标准库 + FFmpeg
+# FFmpeg 需要 4.2+ 版本（支持 xfade 滤镜）
+#
+# 安装 FFmpeg: sudo apt install ffmpeg
+
+# 可选依赖（非必需）:
+# numpy>=1.20.0      # 高级视频分析
+# Pillow>=9.0.0       # 图片处理

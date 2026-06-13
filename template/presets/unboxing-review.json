@@ -1,0 +1,42 @@
+{
+  "template_name": "开箱评测",
+  "version": "1.0",
+  "description": "开箱过程+产品细节特写+使用展示+打分，适合数码/好物开箱",
+  "author": "北辰",
+  "category": "带货/营销",
+  "defaults": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "bitrate": "4M",
+    "clip_duration": 4,
+    "transition": "slideleft",
+    "transition_duration": 0.3
+  },
+  "overlays": [
+    {
+      "type": "text",
+      "position": "top-left",
+      "content": "📦 开箱 {product_name}",
+      "font_size": 32,
+      "animation": "fade-in",
+      "start": 0,
+      "duration": 2
+    },
+    {
+      "type": "text",
+      "position": "bottom-center",
+      "content": "评分: {rating}/10",
+      "font_size": 36,
+      "font_color": "yellow",
+      "animation": "fade-in-up",
+      "start": 0,
+      "duration": 3
+    }
+  ],
+  "audio": {
+    "bgm_style": "upbeat-pop",
+    "volume": {"bgm": 0.2, "original": 1.0},
+    "fade": {"in": 0.5, "out": 1.0}
+  }
+}

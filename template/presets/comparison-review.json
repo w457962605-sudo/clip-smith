@@ -1,0 +1,37 @@
+{
+  "template_name": "对比评测",
+  "version": "1.0",
+  "description": "左右分屏对比，轮番展示A/B两面，带对比标签",
+  "author": "北辰",
+  "category": "评测/对比",
+  "defaults": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "bitrate": "6M",
+    "clip_duration": 4,
+    "transition": "fade",
+    "transition_duration": 0.5
+  },
+  "overlays": [
+    {
+      "type": "text",
+      "position": "top-center",
+      "content": "{title_a} vs {title_b}",
+      "font_size": 36,
+      "animation": "fade-in",
+      "start": 0,
+      "duration": 2
+    },
+    {
+      "type": "mask",
+      "shape": "rectangle",
+      "position": "left-half"
+    }
+  ],
+  "audio": {
+    "bgm_style": "electronic",
+    "volume": {"bgm": 0.2, "original": 1.0},
+    "fade": {"in": 0.5, "out": 1.0}
+  }
+}

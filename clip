@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""
+ClipSmith — CLI视频剪辑工具
+
+用法:
+    clip stitch <文件1> <文件2> ... [-o 输出] [-t 转场] [-d 转场时长]
+    clip template list
+    clip template apply <模板名> <文件1> <文件2> ... -o 输出 [变量...]
+    clip info <文件>
+    clip text <文件> "文字内容" -o 输出 [选项]
+    clip bgm <文件> [-b BGM文件] -o 输出 [选项]
+    clip filter <文件> <滤镜名> -o 输出
+    clip batch <目录>
+    clip preview <文件>
+"""
+
+import sys
+import os
+import json
+import argparse
+from pathlib import Path
+
+# 确保能找到模块
+sys.path.insert(0, str(Path(__file__).parent))
+
+from core.stitch import stitch, quick_concat
+from core.transition import get_transition_list, validate_transition, parse_transition, COMMON_TRANSITIONS
+from core.audio import add_bgm
+from core.subtitle import add_text_overlay
+from core.filter import apply_builtin_filter, list_builtin_filters
+from template.engine import TemplateEngine
+from utils.ffmpeg import get_video_info
+
+
+def cmd_stitch(args):
+    """拼接多段视频"""
+    if len(args.files) < 2:
+        print("❌ 至少需要2个视频文件")
+        return 1
+
+    output = args.output or "output/stitch_output.mp4"
+    os.makedirs(Path(output).parent, exist_ok=True)
+
+    # 检测所有视频参数是否一致，一致则用快速拼接
+    try:
+        infos = [get_video_info(f) for f in args.files]
+        params_set = set()
+        for info in infos:
+            params_set.add((info["width"], info["height"], info["fps"], info["codec"]))
+
+        if len(params_set) == 1 and args.transition == "none":
+            print("⚡ 所有视频参数一致，使用快速拼接（不重新编码）")
+            result = quick_concat(args.files, output)
+        else:
+            result = stitch(
+                args.files, output,
+                transition=args.transition,
+                transition_duration=args.duration,
+            )
+    except Exception as e:
+        print(f"❌ 错误: {e}")
+        return 1
+
+    if result["success"]:
+        info = result.get("info", {})
+        duration = info.get("duration", "?")
+        resolution = info.get("resolution", "?")
+        print(f"✅ 拼接完成: {output}")
+        print(f"   时长: {duration:.1f}s | 分辨率: {resolution} | 片段数: {info.get('clips', len(args.files))}")
+    else:
+        print(f"❌ 拼接失败: {result.get('error', '未知错误')}")
+        return 1
+    return 0
+
+
+def cmd_template(args):
+    """模板相关操作"""
+    engine = TemplateEngine()
+
+    if args.action == "list":
+        templates = engine.list_templates(detailed=True)
+        if not templates:
+            print("📭 暂无模板")
+            return 0
+
+        print(f"\n📋 可用模板 ({len(templates)}个):")
+        print("─" * 60)
+        for t in templates:
+            status = "⚠️" if t.get("error") else "✅"
+            print(f"  {status} {t['name']}")
+            print(f"     {t['description']}")
+            if t.get("params"):
+                print(f"     默认: {t['params'].get('clip_duration','?')}s/段, "
+                      f"转场: {t['params'].get('transition','?')}")
+            print()
+        return 0
+
+    elif args.action == "apply":
+        if len(args.files) < 1:
+            print("❌ 请指定模板名和至少一个素材文件")
+            return 1
+
+        template_name = args.files[0]
+        clip_paths = args.files[1:]
+
+        if not clip_paths:
+            print("❌ 请指定至少一个素材文件")
+            return 1
+
+        output = args.output or f"output/{template_name}_output.mp4"
+        os.makedirs(Path(output).parent, exist_ok=True)
+
+        # 解析变量
+        variables = {}
+        if args.variables:
+            for v in args.variables:
+                if "=" in v:
+                    key, val = v.split("=", 1)
+                    variables[key] = val
+
+        try:
+            # 加载模板
+            template = engine.load_template(template_name)
+            print(f"📄 加载模板: {template.get('template_name', template_name)}")
+
+            # 应用模板
+            config = engine.apply_template(template, clip_paths, variables)
+
+            # 执行拼接
+            defaults = template.get("defaults", {})
+            timeline = config["timeline"]
+
+            # 提取转场参数
+            transitions = [t.get("transition", "fade") for t in timeline]
+            trans = transitions[0] if transitions else "fade"
+            trans_dur = timeline[0].get("transition_duration", 0.3) if timeline else 0.3
+
+            result = stitch(
+                clip_paths, output,
+                transition=trans,
+                transition_duration=trans_dur,
+                width=config["output"]["width"],
+                height=config["output"]["height"],
+                fps=config["output"]["fps"],
+            )
+
+            if not result["success"]:
+                print(f"❌ 渲染失败: {result.get('error', '')}")
+                return 1
+
+            print(f"✅ 模板应用完成: {output}")
+
+            # 如果有 BGM 配置，追加
+            audio_conf = config.get("audio", {})
+            if audio_conf.get("bgm_style") and audio_conf.get("bgm_style") != "none":
+                print(f"   🎵 BGM: {audio_conf['bgm_style']} (假设有匹配文件)")
+
+            info = result.get("info", {})
+            print(f"   时长: {info.get('duration', '?'):.1f}s | "
+                  f"分辨率: {info.get('resolution', '?')} | "
+                  f"片段数: {len(clip_paths)}")
+
+            # 如果有文字叠加，追加
+            for overlay in config.get("overlays", []):
+                if overlay.get("type") == "text" and overlay.get("content"):
+                    text_output = output.replace(".mp4", "_text.mp4")
+                    result2 = add_text_overlay(
+                        output, overlay["content"], text_output,
+                        position=overlay.get("position", "bottom-center"),
+                        font_size=overlay.get("font_size", 36),
+                        animation=overlay.get("animation"),
+                    )
+                    if result2["success"]:
+                        os.replace(text_output, output)
+                        print(f"   📝 文字叠加: \"{overlay['content']}\"")
+                    break  # 只处理第一个文字叠加
+
+        except Exception as e:
+            print(f"❌ 模板应用失败: {e}")
+            return 1
+        return 0
+
+    elif args.action == "show":
+        try:
+            template = engine.load_template(args.files[0])
+            print(json.dumps(template, ensure_ascii=False, indent=2))
+        except Exception as e:
+            print(f"❌ 加载模板失败: {e}")
+            return 1
+        return 0
+
+    else:
+        print("❌ 未知的模板操作")
+        return 1
+
+
+def cmd_info(args):
+    """查看视频信息"""
+    for f in args.files:
+        if not Path(f).exists():
+            print(f"❌ 文件不存在: {f}")
+            continue
+        try:
+            info = get_video_info(f)
+            print(f"\n📹 {Path(f).name}")
+            print(f"   分辨率: {info['width']}x{info['height']}")
+            print(f"   时长: {info['duration']:.2f}s")
+            print(f"   帧率: {info['fps']}fps")
+            print(f"   编码: {info['codec']}")
+            print(f"   像素格式: {info['pix_fmt']}")
+            print(f"   码率: {info['bitrate']//1000}kbps")
+            print(f"   路径: {info['path']}")
+        except Exception as e:
+            print(f"❌ 读取视频信息失败: {e}")
+    return 0
+
+
+def cmd_text(args):
+    """添加文字"""
+    if not args.text:
+        print("❌ 请提供文字内容")
+        return 1
+
+    output = args.output or "output/text_output.mp4"
+    os.makedirs(Path(output).parent, exist_ok=True)
+
+    result = add_text_overlay(
+        args.files[0], args.text, output,
+        position=args.position,
+        font_size=args.font_size,
+        animation=args.animation,
+    )
+    if result["success"]:
+        print(f"✅ 文字添加完成: {output}")
+    else:
+        print(f"❌ 添加文字失败: {result.get('error', '')}")
+        return 1
+    return 0
+
+
+def cmd_bgm(args):
+    """添加BGM"""
+    output = args.output or "output/bgm_output.mp4"
+    os.makedirs(Path(output).parent, exist_ok=True)
+
+    result = add_bgm(
+        args.files[0], args.bgm, output,
+        bgm_volume=args.bgm_volume,
+        fade_in=args.fade_in,
+        fade_out=args.fade_out,
+    )
+    if result["success"]:
+        print(f"✅ BGM添加完成: {output}")
+    else:
+        print(f"❌ 添加BGM失败: {result.get('error', '')}")
+        return 1
+    return 0
+
+
+def cmd_filter(args):
+    """应用滤镜"""
+    output = args.output or "output/filter_output.mp4"
+    os.makedirs(Path(output).parent, exist_ok=True)
+
+    result = apply_builtin_filter(args.files[0], args.filter_name, output)
+    if result["success"]:
+        print(f"✅ 滤镜应用完成: {output}")
+        print(f"   滤镜: {result.get('filter', args.filter_name)}")
+    else:
+        print(f"❌ 应用滤镜失败: {result.get('error', '')}")
+        return 1
+    return 0
+
+
+def cmd_transitions(args):
+    """列出可用转场"""
+    trans = get_transition_list()
+    print("\n🎬 全部转场类型:")
+    print("─" * 50)
+    for name in sorted(trans["all"].keys()):
+        comment = COMMON_TRANSITIONS.get(name, "")
+        marker = " ★" if comment else ""
+        print(f"  {name}{marker}")
+    print("\n★ = 常用推荐")
+    print("\n用法: clip stitch clip1.mp4 clip2.mp4 -t 转场名 -d 时长")
+    return 0
+
+
+def cmd_batch(args):
+    """批量处理目录中的所有项目"""
+    import glob
+
+    project_dir = args.directory
+    if not Path(project_dir).exists():
+        print(f"❌ 目录不存在: {project_dir}")
+        return 1
+
+    # 查找所有 .json 项目文件
+    projects = sorted(glob.glob(os.path.join(project_dir, "*.json")))
+    if not projects:
+        print(f"📭 目录中没有项目文件 (.json)")
+        return 0
+
+    engine = TemplateEngine()
+    success = 0
+    failed = 0
+
+    for proj_path in projects:
+        print(f"\n📄 处理项目: {Path(proj_path).name}")
+        try:
+            with open(proj_path, "r", encoding="utf-8") as f:
+                project = json.load(f)
+
+            clips = project.get("clips", [])
+            template_name = project.get("template", "product-show")
+            output = project.get("output", f"output/{Path(proj_path).stem}.mp4")
+            variables = project.get("variables", {})
+
+            if not clips:
+                print(f"   ⚠️ 跳过: 没有素材")
+                continue
+
+            template = engine.load_template(template_name)
+            result = engine.apply_template(template, clips, variables)
+
+            stitch(
+                clips, output,
+                transition=result["timeline"][0].get("transition", "fade"),
+                transition_duration=result["timeline"][0].get("transition_duration", 0.3),
+            )
+            print(f"   ✅ {output}")
+            success += 1
+        except Exception as e:
+            print(f"   ❌ 失败: {e}")
+            failed += 1
+
+    print(f"\n📊 批量处理完成: {success}个成功, {failed}个失败")
+    return 0 if failed == 0 else 1
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="ClipSmith — 命令行短视频剪辑工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  clip stitch clip1.mp4 clip2.mp4 clip3.mp4 -o output.mp4
+  clip stitch clip1.mp4 clip2.mp4 -t slideleft -d 0.5 -o output.mp4
+  clip template list
+  clip template apply product-show clip1.mp4 clip2.mp4 clip3.mp4 --var title=产品名
+  clip info video.mp4
+  clip text video.mp4 "标题文字" -o output.mp4
+  clip bgm video.mp4 -b music.mp3 -o output.mp4
+  clip filter video.mp4 warm -o output.mp4
+  clip transitions
+  clip batch ./projects/
+        """
+    )
+    subparsers = parser.add_subparsers(dest="command", help="子命令")
+
+    # stitch
+    p_stitch = subparsers.add_parser("stitch", help="拼接多段视频")
+    p_stitch.add_argument("files", nargs="+", help="视频文件")
+    p_stitch.add_argument("-o", "--output", default="", help="输出路径")
+    p_stitch.add_argument("-t", "--transition", default="fade",
+                         help=f"转场类型 (默认: fade, 可用: {', '.join(list(COMMON_TRANSITIONS.keys())[:10])}...)")
+    p_stitch.add_argument("-d", "--duration", type=float, default=0.3, help="转场时长 (秒, 默认: 0.3)")
+
+    # template
+    p_tpl = subparsers.add_parser("template", help="模板操作")
+    p_tpl.add_argument("action", choices=["list", "apply", "show"], help="操作")
+    p_tpl.add_argument("files", nargs="*", help="模板名 + 素材文件")
+    p_tpl.add_argument("-o", "--output", default="", help="输出路径")
+    p_tpl.add_argument("--var", dest="variables", action="append", help="变量替换 key=value")
+
+    # info
+    p_info = subparsers.add_parser("info", help="查看视频信息")
+    p_info.add_argument("files", nargs="+", help="视频文件")
+
+    # text
+    p_text = subparsers.add_parser("text", help="添加文字")
+    p_text.add_argument("files", nargs=1, help="视频文件")
+    p_text.add_argument("text", nargs="?", default="", help="文字内容")
+    p_text.add_argument("-o", "--output", default="", help="输出路径")
+    p_text.add_argument("-p", "--position", default="bottom-center",
+                       help="位置 (top-left/center/bottom-center 等)")
+    p_text.add_argument("-s", "--font-size", type=int, default=36, help="字号")
+    p_text.add_argument("-a", "--animation", default="", help="动画 (fade-in/fade-in-up/slide-up)")
+
+    # bgm
+    p_bgm = subparsers.add_parser("bgm", help="添加背景音乐")
+    p_bgm.add_argument("files", nargs=1, help="视频文件")
+    p_bgm.add_argument("-b", "--bgm", default="", help="BGM文件路径")
+    p_bgm.add_argument("-o", "--output", default="", help="输出路径")
+    p_bgm.add_argument("--bgm-volume", type=float, default=0.3, help="BGM音量 (0~1)")
+    p_bgm.add_argument("--fade-in", type=float, default=0.5, help="淡入时长")
+    p_bgm.add_argument("--fade-out", type=float, default=1.0, help="淡出时长")
+
+    # filter
+    p_filter = subparsers.add_parser("filter", help="应用滤镜")
+    p_filter.add_argument("files", nargs=1, help="视频文件")
+    p_filter.add_argument("filter_name", help=f"滤镜名: {', '.join(list_builtin_filters().keys())}")
+    p_filter.add_argument("-o", "--output", default="", help="输出路径")
+
+    # transitions
+    subparsers.add_parser("transitions", help="列出所有可用转场")
+
+    # batch
+    p_batch = subparsers.add_parser("batch", help="批量处理目录")
+    p_batch.add_argument("directory", help="项目目录")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 0
+
+    # 创建输出目录
+    os.makedirs("output", exist_ok=True)
+
+    # 路由
+    router = {
+        "stitch": cmd_stitch,
+        "template": cmd_template,
+        "info": cmd_info,
+        "text": cmd_text,
+        "bgm": cmd_bgm,
+        "filter": cmd_filter,
+        "transitions": cmd_transitions,
+        "batch": cmd_batch,
+    }
+
+    handler = router.get(args.command)
+    if handler:
+        return handler(args)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

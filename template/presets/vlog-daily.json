@@ -1,0 +1,41 @@
+{
+  "template_name": "Vlog日常",
+  "version": "1.0",
+  "description": "慢节奏温暖过渡，温馨BGM，角落日期水印。适合生活记录、旅行Vlog",
+  "author": "北辰",
+  "category": "生活/Vlog",
+  "defaults": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "bitrate": "4M",
+    "clip_duration": 5,
+    "transition": "fade",
+    "transition_duration": 0.5
+  },
+  "overlays": [
+    {
+      "type": "text",
+      "position": "top-left",
+      "content": "{date}",
+      "font_size": 20,
+      "animation": "fade-in",
+      "start": 0,
+      "duration": 3
+    },
+    {
+      "type": "text",
+      "position": "center",
+      "content": "{location}",
+      "font_size": 36,
+      "animation": "fade-in-up",
+      "start": 0.5,
+      "duration": 2.5
+    }
+  ],
+  "audio": {
+    "bgm_style": "lo-fi",
+    "volume": {"bgm": 0.2, "original": 1.0},
+    "fade": {"in": 0.5, "out": 1.5}
+  }
+}

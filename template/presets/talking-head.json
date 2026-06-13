@@ -1,0 +1,41 @@
+{
+  "template_name": "口播知识类",
+  "version": "1.0",
+  "description": "单段长视频口播+大字标题+字幕，适合知识分享、教程、观点输出",
+  "author": "北辰",
+  "category": "知识/教育",
+  "defaults": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "bitrate": "4M",
+    "clip_duration": 15,
+    "transition": "fade",
+    "transition_duration": 0.5
+  },
+  "overlays": [
+    {
+      "type": "text",
+      "position": "top-center",
+      "content": "{title}",
+      "font_size": 48,
+      "animation": "fade-in-up",
+      "start": 0,
+      "duration": 3
+    },
+    {
+      "type": "text",
+      "position": "bottom-center",
+      "content": "关注我，持续分享干货",
+      "font_size": 24,
+      "animation": "fade-in",
+      "start": 0,
+      "duration": 3
+    }
+  ],
+  "audio": {
+    "bgm_style": "gentle-piano",
+    "volume": {"bgm": 0.15, "original": 1.0},
+    "fade": {"in": 1.0, "out": 2.0}
+  }
+}

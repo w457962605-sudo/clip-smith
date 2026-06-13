@@ -1,0 +1,33 @@
+{
+  "template_name": "卡点节奏",
+  "version": "1.0",
+  "description": "短快节奏，每段2秒，滑动转场，卡点BGM。适合音乐卡点、穿搭展示、风景快剪",
+  "author": "北辰",
+  "category": "卡点/音乐",
+  "defaults": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "bitrate": "6M",
+    "clip_duration": 2,
+    "transition": "slideleft",
+    "transition_duration": 0.2
+  },
+  "overlays": [
+    {
+      "type": "text",
+      "position": "center",
+      "content": "",
+      "font_size": 48,
+      "animation": "zoom-in",
+      "start": 0,
+      "duration": 1.5
+    }
+  ],
+  "audio": {
+    "bgm_style": "electronic",
+    "volume": {"bgm": 0.3, "original": 0.0},
+    "fade": {"in": 0, "out": 0.5},
+    "replace_original": true
+  }
+}

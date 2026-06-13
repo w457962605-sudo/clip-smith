@@ -1,0 +1,43 @@
+{
+  "template_name": "教程步骤",
+  "version": "1.0",
+  "description": "分步骤讲解，每段一个大标题说明当前步骤，适合教程、操作指南",
+  "author": "北辰",
+  "category": "知识/教育",
+  "defaults": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "bitrate": "4M",
+    "clip_duration": 8,
+    "transition": "fade",
+    "transition_duration": 0.5
+  },
+  "overlays": [
+    {
+      "type": "text",
+      "position": "top-center",
+      "content": "步骤 {step_number}: {step_title}",
+      "font_size": 40,
+      "font_color": "white",
+      "bg_color": "black@0.6",
+      "animation": "fade-in-up",
+      "start": 0,
+      "duration": 3
+    },
+    {
+      "type": "text",
+      "position": "bottom-center",
+      "content": "关注获取更多教程",
+      "font_size": 22,
+      "animation": "fade-in",
+      "start": 0,
+      "duration": 2
+    }
+  ],
+  "audio": {
+    "bgm_style": "gentle-piano",
+    "volume": {"bgm": 0.15, "original": 1.0},
+    "fade": {"in": 1.0, "out": 1.0}
+  }
+}

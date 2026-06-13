@@ -1,0 +1,52 @@
+{
+  "template_name": "带货促销",
+  "version": "1.0",
+  "description": "开篇抓眼球+产品展示+价格呈现+CTA引导，标准带货视频结构",
+  "author": "北辰",
+  "category": "带货/营销",
+  "defaults": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "bitrate": "4M",
+    "clip_duration": 4,
+    "transition": "fade",
+    "transition_duration": 0.3
+  },
+  "overlays": [
+    {
+      "type": "text",
+      "position": "center",
+      "content": "{hook}",
+      "font_size": 52,
+      "font_color": "yellow",
+      "animation": "fade-in",
+      "start": 0,
+      "duration": 2.5
+    },
+    {
+      "type": "text",
+      "position": "bottom-center",
+      "content": "{price}",
+      "font_size": 44,
+      "font_color": "red",
+      "animation": "zoom-in",
+      "start": 0,
+      "duration": 3
+    },
+    {
+      "type": "text",
+      "position": "bottom-center",
+      "content": "点击下方链接购买",
+      "font_size": 28,
+      "animation": "fade-in",
+      "start": 0,
+      "duration": 3
+    }
+  ],
+  "audio": {
+    "bgm_style": "promo-upbeat",
+    "volume": {"bgm": 0.2, "original": 1.0},
+    "fade": {"in": 0.3, "out": 1.0}
+  }
+}
