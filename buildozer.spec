@@ -1,7 +1,7 @@
 [app]
 
 # 应用名称
-title = JY
+title = JY剪辑
 
 # 包名（唯一标识）
 package.name = jyclips
@@ -13,12 +13,12 @@ package.domain = com.justyou
 source.dir = .
 
 # 入口文件
-source.main = clip.py
+source.main = main.py
 
 # 版本号
 version = 0.1.0
 
-# 需求
+# 需求 - ffmpeg 通过 kivy 的 android 依赖自动包含
 requirements = python3,kivy
 
 # 权限
@@ -33,11 +33,15 @@ android.minapi = 21
 # 目标 SDK 版本
 android.api = 33
 
-# 应用图标（默认使用 Kivy 默认图标）
+# 应用图标
 # icon = icon.png
 
 # 是否为数字签名调试版本
 android.debug = 1
+
+# 添加 ffmpeg 二进制
+android.add_libs_armeabi_v7a = /usr/lib/arm-linux-gnueabihf/lib*.so
+android.add_libs_arm64_v8a = /usr/lib/aarch64-linux-gnu/lib*.so
 
 [buildozer]
 
