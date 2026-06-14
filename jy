@@ -1,0 +1,546 @@
+#!/usr/bin/env python3
+"""
+JY — 命令行视频剪辑工具
+
+用法:
+  jy info <视频>                 查看视频信息
+  jy concat <视频1> <视频2> ...  拼接视频（自动分析参数+转场）
+  jy trim <视频> -s 00:01:00 -e 00:02:30 -o <输出>   裁剪
+  jy filter <视频> -f vintage -o <输出>   应用滤镜
+  jy subtitle <视频> -s <字幕.srt> -o <输出>  烧录字幕
+  jy text <视频> -t "文字" -o <输出>     叠加文字
+  jy audio <视频> -b <bgm.mp3> -o <输出>  添加背景音乐
+  jy speed <视频> -x 2.0 -o <输出>  变速
+  jy crop <视频> -r 1080x1920 -o <输出>  裁剪尺寸
+  jy volume <视频> -o <输出>      音量标准化
+  jy extract-audio <视频> -o <输出.mp3> 提取音频
+  jy remove-silence <视频> -o <输出>  去除静音
+  jy template <模板名> <视频目录> -o <输出>  模板化剪辑
+  jy batch <配置文件.json>        批量处理
+  jy list-templates               列出可用预设模板
+  jy list-filters                 列出可用滤镜
+  jy list-transitions             列出可用转场
+
+示例:
+  jy concat clip1.mp4 clip2.mp4 clip3.mp4 -o 成片.mp4
+  jy concat clip1.mp4 clip2.mp4 -t slideleft -d 0.5 -o out.mp4
+  jy trim input.mp4 -s 00:01:30 -e 00:03:00 -o clip.mp4
+  jy filter input.mp4 -f dramatic -o output.mp4
+  jy text input.mp4 -t "Hello World" -p center -o output.mp4
+  jy audio input.mp4 -b bgm.mp3 --ducking -o output.mp4
+  jy speed input.mp4 -x 2.0 -o fast.mp4
+"""
+
+import sys
+import os
+import json
+import argparse
+from pathlib import Path
+
+# 确保能加载核心模块
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from core.stitch import stitch, quick_concat
+from core.transition import get_transition_list, validate_transition, parse_transition
+from core.subtitle import burn_subtitle, create_srt_from_segments, add_text_overlay
+from core.filter import list_builtin_filters, apply_builtin_filter
+from core.audio import add_bgm, normalize_volume, extract_audio, remove_silence
+from template.engine import TemplateEngine
+from utils.ffmpeg import get_video_info
+
+
+def cmd_info(args):
+    """查看视频信息"""
+    info = get_video_info(args.video)
+    print(f"文件:     {info['path']}")
+    print(f"分辨率:   {info['width']}x{info['height']}")
+    print(f"帧率:     {info['fps']} fps")
+    print(f"时长:     {info['duration']:.2f} 秒")
+    print(f"编码:     {info['codec']}")
+    print(f"像素格式: {info['pix_fmt']}")
+    print(f"码率:     {info['bitrate']} bps")
+
+
+def cmd_concat(args):
+    """拼接视频"""
+    if len(args.videos) < 2:
+        print("❌ 至少需要2个视频文件")
+        sys.exit(1)
+
+    output = args.output or "output.mp4"
+    transition = args.transition or "fade"
+    duration = args.duration or 0.3
+
+    print(f"📦 拼接 {len(args.videos)} 个视频...")
+    print(f"   转场: {transition} ({duration}s)")
+    print(f"   输出: {output}")
+
+    result = stitch(
+        args.videos, output,
+        transition=transition,
+        transition_duration=duration,
+    )
+
+    if result["success"]:
+        info = result["info"]
+        print(f"✅ 拼接完成!")
+        print(f"   时长: {info['duration']}s")
+        print(f"   分辨率: {info['resolution']}")
+        print(f"   输出: {result['output']}")
+    else:
+        print(f"❌ 失败: {result['error']}")
+        sys.exit(1)
+
+
+def cmd_trim(args):
+    """裁剪视频片段"""
+    from utils.ffmpeg import run_ffmpeg
+
+    output = args.output or f"{Path(args.video).stem}_trim.mp4"
+
+    cmd = ["ffmpeg", "-y", "-i", args.video]
+    if args.start:
+        cmd += ["-ss", args.start]
+    if args.end:
+        cmd += ["-to", args.end]
+    if args.duration:
+        cmd += ["-t", str(args.duration)]
+    cmd += ["-c:v", "libx264", "-c:a", "aac", output]
+
+    print(f"✂️  裁剪: {args.video}")
+    if args.start: print(f"   开始: {args.start}")
+    if args.end: print(f"   结束: {args.end}")
+    print(f"   输出: {output}")
+
+    result = run_ffmpeg(cmd)
+    if result["success"]:
+        print(f"✅ 裁剪完成!")
+    else:
+        print(f"❌ 失败: {result.get('stderr', '未知错误')[:500]}")
+        sys.exit(1)
+
+
+def cmd_filter(args):
+    """应用滤镜"""
+    output = args.output or f"{Path(args.video).stem}_{args.filter_name}.mp4"
+    print(f"🎨 应用滤镜: {args.filter_name}")
+    print(f"   输入: {args.video}")
+    print(f"   输出: {output}")
+
+    result = apply_builtin_filter(args.video, args.filter_name, output)
+    if result["success"]:
+        print(f"✅ 滤镜应用完成!")
+    else:
+        print(f"❌ 失败: {result['error']}")
+        sys.exit(1)
+
+
+def cmd_list_filters(args):
+    """列出可用滤镜"""
+    filters = list_builtin_filters()
+    print(f"\n📋 可用滤镜 ({len(filters)} 个):\n")
+    for name, info in filters.items():
+        print(f"  {name:<15} {info['name']}")
+        print(f"  {'':15} {info['description']}")
+        print()
+
+
+def cmd_list_transitions(args):
+    """列出可用转场"""
+    trans = get_transition_list()
+    print(f"\n📋 可用转场 ({len(trans['common'])} 个推荐):\n")
+    for name, desc in trans["common"].items():
+        print(f"  {name:<20} {desc}")
+    print(f"\n  完整列表含 {len(trans['all'])} 种转场")
+
+
+def cmd_subtitle(args):
+    """烧录字幕"""
+    output = args.output or f"{Path(args.video).stem}_subbed.mp4"
+    result = None
+
+    if args.text:
+        # 直接文字叠加
+        print(f"📝 添加文字: \"{args.text}\"")
+        print(f"   位置: {args.position or 'bottom-center'}")
+        result = add_text_overlay(
+            args.video, args.text, output,
+            position=args.position or "bottom-center",
+            font_size=args.font_size or 36,
+        )
+    elif args.srt:
+        # SRT 字幕
+        print(f"📝 烧录字幕: {args.srt}")
+        result = burn_subtitle(args.video, args.srt, output)
+    else:
+        print("❌ 请指定 --text 文字内容 或 --srt 字幕文件")
+        sys.exit(1)
+
+    if result["success"]:
+        print(f"✅ 字幕添加完成!")
+    else:
+        print(f"❌ 失败: {result['error']}")
+        sys.exit(1)
+
+
+def cmd_audio(args):
+    """添加背景音乐"""
+    output = args.output or f"{Path(args.video).stem}_bgm.mp4"
+
+    if not args.bgm:
+        print("❌ 请指定 --bgm 背景音乐文件")
+        sys.exit(1)
+
+    print(f"🎵 添加背景音乐")
+    print(f"   视频: {args.video}")
+    print(f"   BGM: {args.bgm}")
+    print(f"   音量: BGM={args.bgm_volume}, 原声={args.original_volume}")
+    print(f"   人声优先: {'是' if args.ducking else '否'}")
+
+    result = add_bgm(
+        args.video, args.bgm, output,
+        bgm_volume=args.bgm_volume,
+        original_volume=args.original_volume,
+        ducking=args.ducking,
+    )
+
+    if result["success"]:
+        print(f"✅ BGM 添加完成!")
+    else:
+        print(f"❌ 失败: {result['error']}")
+        sys.exit(1)
+
+
+def cmd_speed(args):
+    """变速"""
+    from utils.ffmpeg import run_ffmpeg
+
+    output = args.output or f"{Path(args.video).stem}_x{args.speed}.mp4"
+
+    print(f"⚡ 变速: x{args.speed}")
+    print(f"   输入: {args.video}")
+    print(f"   输出: {output}")
+
+    setpts = 1.0 / args.speed
+    atempo = args.speed
+
+    # atempo 范围 0.5~2.0，超出需要链式调用
+    if atempo < 0.5:
+        atempo = 0.5
+    elif atempo > 100.0:
+        atempo = 100.0
+
+    # 处理 atempo 超出 [0.5, 2.0] 的情况
+    def build_atempo(target):
+        chains = []
+        while target > 2.0:
+            chains.append("atempo=2.0")
+            target /= 2.0
+        while target < 0.5:
+            chains.append("atempo=0.5")
+            target /= 0.5
+        chains.append(f"atempo={target:.3f}")
+        return ",".join(chains)
+
+    audio_filter = build_atempo(atempo)
+
+    cmd = [
+        "ffmpeg", "-y", "-i", args.video,
+        "-filter:v", f"setpts={setpts}*PTS",
+        "-filter:a", audio_filter,
+        "-c:v", "libx264", "-c:a", "aac", output,
+    ]
+
+    result = run_ffmpeg(cmd)
+    if result["success"]:
+        print(f"✅ 变速完成!")
+    else:
+        print(f"❌ 失败: {result.get('stderr', '')[:500]}")
+        sys.exit(1)
+
+
+def cmd_crop(args):
+    """裁剪尺寸"""
+    from utils.ffmpeg import run_ffmpeg
+
+    output = args.output or f"{Path(args.video).stem}_crop.mp4"
+    res = args.resolution or "1080x1920"
+
+    print(f"✂️  裁剪尺寸: {res}")
+    print(f"   输入: {args.video}")
+    print(f"   输出: {output}")
+
+    w, h = res.split("x")
+    cmd = [
+        "ffmpeg", "-y", "-i", args.video,
+        "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2",
+        "-c:v", "libx264", "-c:a", "aac", output,
+    ]
+
+    result = run_ffmpeg(cmd)
+    if result["success"]:
+        print(f"✅ 裁剪完成!")
+    else:
+        print(f"❌ 失败: {result.get('stderr', '')[:500]}")
+        sys.exit(1)
+
+
+def cmd_volume(args):
+    """音量标准化"""
+    output = args.output or f"{Path(args.video).stem}_normalized.mp4"
+    print(f"🔊 音量标准化")
+    print(f"   输入: {args.video}")
+    print(f"   输出: {output}")
+
+    result = normalize_volume(args.video, output)
+    if result["success"]:
+        print(f"✅ 音量标准化完成!")
+    else:
+        print(f"❌ 失败: {result['error']}")
+        sys.exit(1)
+
+
+def cmd_extract_audio(args):
+    """提取音频"""
+    output = args.output or f"{Path(args.video).stem}.mp3"
+    fmt = "mp3" if output.endswith(".mp3") else "m4a"
+    print(f"🔊 提取音频")
+    print(f"   输入: {args.video}")
+    print(f"   输出: {output}")
+
+    result = extract_audio(args.video, output, format=fmt)
+    if result["success"]:
+        print(f"✅ 音频提取完成!")
+    else:
+        print(f"❌ 失败: {result['error']}")
+        sys.exit(1)
+
+
+def cmd_remove_silence(args):
+    """去除静音"""
+    output = args.output or f"{Path(args.video).stem}_nosilence.mp4"
+    print(f"🔇 去除静音片段")
+    print(f"   输入: {args.video}")
+    print(f"   输出: {output}")
+
+    result = remove_silence(args.video, output)
+    if result["success"]:
+        print(f"✅ 静音去除完成!")
+    else:
+        print(f"❌ 失败: {result['error']}")
+        sys.exit(1)
+
+
+def cmd_template(args):
+    """模板化剪辑"""
+    engine = TemplateEngine()
+    video_dir = Path(args.video_dir)
+
+    videos = sorted([str(p) for p in video_dir.glob("*.mp4")] +
+                    [str(p) for p in video_dir.glob("*.mov")] +
+                    [str(p) for p in video_dir.glob("*.avi")] +
+                    [str(p) for p in video_dir.glob("*.mkv")])
+
+    if not videos:
+        print(f"❌ 目录中没有视频文件: {args.video_dir}")
+        sys.exit(1)
+
+    output = args.output or f"{args.template_name}.mp4"
+
+    print(f"📋 模板: {args.template_name}")
+    print(f"   视频数: {len(videos)}")
+    print(f"   输出: {output}")
+
+    result = engine.render_template(args.template_name, videos, output)
+    if result.get("success"):
+        print(f"✅ 模板剪辑完成!")
+    else:
+        print(f"❌ 失败: {result.get('error', '未知错误')}")
+        sys.exit(1)
+
+
+def cmd_list_templates(args):
+    """列出模板"""
+    engine = TemplateEngine()
+    templates = engine.list_templates()
+    print(f"\n📋 可用模板 ({len(templates)} 个):\n")
+    for t in templates:
+        print(f"  {t['name']:<25} {t['description']}")
+        print()
+
+
+def cmd_batch(args):
+    """批量处理"""
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"❌ 配置文件不存在: {args.config}")
+        sys.exit(1)
+
+    with open(config_path) as f:
+        config = json.load(f)
+
+    print(f"📦 批量处理 ({len(config.get('tasks', []))} 个任务)")
+    results = []
+
+    for i, task in enumerate(config.get("tasks", []), 1):
+        task_type = task.get("type", "concat")
+        print(f"\n  [{i}/{len(config['tasks'])}] {task_type}: {task.get('output', '?')}")
+
+        try:
+            if task_type == "concat":
+                r = stitch(task["videos"], task["output"],
+                           transition=task.get("transition", "fade"),
+                           transition_duration=task.get("duration", 0.3))
+            elif task_type == "filter":
+                r = apply_builtin_filter(task["video"], task["filter"], task["output"])
+            elif task_type == "audio":
+                r = add_bgm(task["video"], task["bgm"], task["output"],
+                            bgm_volume=task.get("bgm_volume", 0.3),
+                            ducking=task.get("ducking", False))
+            else:
+                r = {"success": False, "error": f"未知任务类型: {task_type}"}
+
+            status = "✅" if r["success"] else "❌"
+            print(f"  {status} {r.get('output', task['output'])}")
+            results.append(r)
+        except Exception as e:
+            print(f"  ❌ 异常: {e}")
+            results.append({"success": False, "error": str(e)})
+
+    success_count = sum(1 for r in results if r.get("success"))
+    print(f"\n📊 完成: {success_count}/{len(config['tasks'])}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="JY — 命令行视频剪辑工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  jy info video.mp4
+  jy concat clip1.mp4 clip2.mp4 clip3.mp4 -o final.mp4
+  jy concat clip1.mp4 clip2.mp4 -t slideleft -d 0.5 -o out.mp4
+  jy trim input.mp4 -s 00:01:30 -e 00:03:00 -o clip.mp4
+  jy filter input.mp4 -f dramatic -o output.mp4
+  jy text input.mp4 -t "Hello World" -p top-center -o output.mp4
+  jy audio input.mp4 -b bgm.mp3 --ducking -o output.mp4
+  jy speed input.mp4 -x 2.0 -o fast.mp4
+        """
+    )
+    subparsers = parser.add_subparsers(dest="command", help="子命令")
+
+    # info
+    p = subparsers.add_parser("info", help="查看视频信息")
+    p.add_argument("video", help="视频文件路径")
+
+    # concat
+    p = subparsers.add_parser("concat", help="拼接视频")
+    p.add_argument("videos", nargs="+", help="视频文件列表")
+    p.add_argument("-o", "--output", help="输出文件")
+    p.add_argument("-t", "--transition", default="fade", help="转场类型 (默认: fade)")
+    p.add_argument("-d", "--duration", type=float, default=0.3, help="转场时长秒 (默认: 0.3)")
+
+    # trim
+    p = subparsers.add_parser("trim", help="裁剪视频片段")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-s", "--start", help="开始时间 (00:01:30)")
+    p.add_argument("-e", "--end", help="结束时间 (00:03:00)")
+    p.add_argument("-t", "--duration", type=float, help="时长（秒）")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    # filter
+    p = subparsers.add_parser("filter", help="应用滤镜")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-f", "--filter-name", required=True, help="滤镜名称")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    p = subparsers.add_parser("list-filters", help="列出可用滤镜")
+    p = subparsers.add_parser("list-transitions", help="列出可用转场")
+
+    # subtitle / text
+    p = subparsers.add_parser("text", help="叠加文字")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-t", "--text", help="文字内容")
+    p.add_argument("-s", "--srt", help="SRT字幕文件")
+    p.add_argument("-p", "--position", default="bottom-center", help="位置 (默认: bottom-center)")
+    p.add_argument("--font-size", type=int, default=36, help="字号 (默认: 36)")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    # audio
+    p = subparsers.add_parser("audio", help="添加背景音乐")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-b", "--bgm", help="BGM文件路径")
+    p.add_argument("--bgm-volume", type=float, default=0.3, help="BGM音量 (默认: 0.3)")
+    p.add_argument("--original-volume", type=float, default=1.0, help="原声音量 (默认: 1.0)")
+    p.add_argument("--ducking", action="store_true", help="开启人声优先")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    # speed
+    p = subparsers.add_parser("speed", help="变速")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-x", "--speed", type=float, required=True, help="速度倍率 (0.5~2.0)")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    # crop
+    p = subparsers.add_parser("crop", help="裁剪尺寸")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-r", "--resolution", help="分辨率 (如 1080x1920)")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    # volume
+    p = subparsers.add_parser("volume", help="音量标准化")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    # extract-audio
+    p = subparsers.add_parser("extract-audio", help="提取音频")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-o", "--output", help="输出文件 (.mp3 或 .m4a)")
+
+    # remove-silence
+    p = subparsers.add_parser("remove-silence", help="去除静音")
+    p.add_argument("video", help="视频文件路径")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    # template
+    p = subparsers.add_parser("template", help="模板化剪辑")
+    p.add_argument("template_name", help="模板名称")
+    p.add_argument("video_dir", help="视频目录路径")
+    p.add_argument("-o", "--output", help="输出文件")
+
+    p = subparsers.add_parser("list-templates", help="列出可用模板")
+
+    # batch
+    p = subparsers.add_parser("batch", help="批量处理")
+    p.add_argument("config", help="配置文件 (.json)")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    commands = {
+        "info": cmd_info,
+        "concat": cmd_concat,
+        "trim": cmd_trim,
+        "filter": cmd_filter,
+        "list-filters": cmd_list_filters,
+        "list-transitions": cmd_list_transitions,
+        "text": cmd_subtitle,
+        "audio": cmd_audio,
+        "speed": cmd_speed,
+        "crop": cmd_crop,
+        "volume": cmd_volume,
+        "extract-audio": cmd_extract_audio,
+        "remove-silence": cmd_remove_silence,
+        "template": cmd_template,
+        "list-templates": cmd_list_templates,
+        "batch": cmd_batch,
+    }
+
+    commands[args.command](args)
+
+
+if __name__ == "__main__":
+    main()
